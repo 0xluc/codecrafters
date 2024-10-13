@@ -46,16 +46,16 @@ func main() {
 	command := os.Args[1]
 
 	if command == "decode" {
-		Uncomment this block to pass the first stage
-		
+		//Uncomment this block to pass the first stage
+
 		bencodedValue := os.Args[2]
-		
+
 		decoded, err := decodeBencode(bencodedValue)
 		if err != nil {
 			fmt.Println(err)
 			return
 		}
-		
+
 		jsonOutput, _ := json.Marshal(decoded)
 		fmt.Println(string(jsonOutput))
 	} else {
