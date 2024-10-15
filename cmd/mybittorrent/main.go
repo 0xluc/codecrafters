@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/jackpal/bencode-go"
 	"os"
 	"strings"
+
+	"github.com/jackpal/bencode-go"
 )
 
 // Example:
@@ -20,12 +24,15 @@ func decodeBencode(bencodedString string) (interface{}, error) {
 	}
 	return data, nil
 }
-func parseTorrentFile(location string) (string, int64, error) {
+func parseTorrentFile(location string) (string, int64, string, error) {
 	data, err := os.ReadFile(location)
 	var tracker string
 	var length int64
+	var hashedString string
+
+	hasher := sha1.New()
 	if err != nil {
-		return "", 0, err
+		return "", 0, "", err
 	}
 	decodedData, err := decodeBencode(string(data))
 	if resultMap, ok := decodedData.(map[string]interface{}); ok {
@@ -35,6 +42,18 @@ func parseTorrentFile(location string) (string, int64, error) {
 	}
 
 	if resultMap, ok := decodedData.(map[string]interface{}); ok {
+		// marshal the info element again
+		var buffer bytes.Buffer
+		infoDict := resultMap["info"]
+		if err := bencode.Marshal(&buffer, infoDict); err != nil {
+			fmt.Println("Error marshaling", err)
+			return "", 0, "", err
+		}
+		hasher.Write(buffer.Bytes())
+		hashed := hasher.Sum(nil)
+		hashedString = hex.EncodeToString(hashed)
+
+		// get the length
 		if info, ok := resultMap["info"].(map[string]interface{}); ok {
 			if l, ok := info["length"].(int64); ok {
 				length = l
@@ -42,9 +61,9 @@ func parseTorrentFile(location string) (string, int64, error) {
 		}
 	}
 	if err != nil {
-		return "", 0, err
+		return "", 0, "", err
 	}
-	return tracker, length, nil
+	return tracker, length, hashedString, nil
 
 	//if unicode.IsDigit(rune(bencodedString[0])) {
 	//	var firstColonIndex int
@@ -85,13 +104,14 @@ func main() {
 		fmt.Println(string(jsonOutput))
 	} else if command == "info" {
 		filePath := os.Args[2]
-		tracker, length, err := parseTorrentFile(filePath)
+		tracker, length, hashedInfo, err := parseTorrentFile(filePath)
 		if err != nil {
 			fmt.Println(err)
 			return
 		}
 		fmt.Println("Tracker URL:", tracker)
 		fmt.Println("Length:", length)
+		fmt.Println("Info Hash:", hashedInfo)
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
