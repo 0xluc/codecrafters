@@ -12,6 +12,14 @@ import (
 	"github.com/jackpal/bencode-go"
 )
 
+type ParsedTorrent struct {
+	Tracker     string
+	Length      int64
+	InfoHash    string
+	PieceLength int64
+	PieceHashes []string
+}
+
 // Example:
 // - 5:hello -> hello
 // - 10:hello12345 -> hello12345
@@ -24,20 +32,25 @@ func decodeBencode(bencodedString string) (interface{}, error) {
 	}
 	return data, nil
 }
-func parseTorrentFile(location string) (string, int64, string, error) {
-	data, err := os.ReadFile(location)
-	var tracker string
-	var length int64
-	var hashedString string
 
+func hashBuffer(buffer bytes.Buffer) string {
 	hasher := sha1.New()
+	hasher.Write(buffer.Bytes())
+	hashed := hasher.Sum(nil)
+	return hex.EncodeToString(hashed)
+}
+
+func parseTorrentFile(location string) (ParsedTorrent, error) {
+	parsedTorrent := &ParsedTorrent{}
+
+	data, err := os.ReadFile(location)
 	if err != nil {
-		return "", 0, "", err
+		return *parsedTorrent, err
 	}
 	decodedData, err := decodeBencode(string(data))
 	if resultMap, ok := decodedData.(map[string]interface{}); ok {
 		if announce, ok := resultMap["announce"].(string); ok {
-			tracker = announce
+			parsedTorrent.Tracker = announce
 		}
 	}
 
@@ -47,23 +60,35 @@ func parseTorrentFile(location string) (string, int64, string, error) {
 		infoDict := resultMap["info"]
 		if err := bencode.Marshal(&buffer, infoDict); err != nil {
 			fmt.Println("Error marshaling", err)
-			return "", 0, "", err
+			return *parsedTorrent, err
 		}
-		hasher.Write(buffer.Bytes())
-		hashed := hasher.Sum(nil)
-		hashedString = hex.EncodeToString(hashed)
+		parsedTorrent.InfoHash = hashBuffer(buffer)
 
 		// get the length
 		if info, ok := resultMap["info"].(map[string]interface{}); ok {
 			if l, ok := info["length"].(int64); ok {
-				length = l
+				parsedTorrent.Length = l
+			}
+			if piece, ok := info["piece length"].(int64); ok {
+				parsedTorrent.PieceLength = piece
+			}
+			if pieces, ok := info["pieces"].(string); ok {
+				chunkSize := 20
+				for i := 0; i < len(pieces); i += chunkSize {
+					end := i + chunkSize
+					if end > len(pieces) {
+						end = len(pieces)
+					}
+					chunk := pieces[i:end]
+					parsedTorrent.PieceHashes = append(parsedTorrent.PieceHashes, hex.EncodeToString([]byte(chunk)))
+				}
 			}
 		}
 	}
 	if err != nil {
-		return "", 0, "", err
+		return *parsedTorrent, err
 	}
-	return tracker, length, hashedString, nil
+	return *parsedTorrent, nil
 
 	//if unicode.IsDigit(rune(bencodedString[0])) {
 	//	var firstColonIndex int
@@ -104,14 +129,19 @@ func main() {
 		fmt.Println(string(jsonOutput))
 	} else if command == "info" {
 		filePath := os.Args[2]
-		tracker, length, hashedInfo, err := parseTorrentFile(filePath)
+		parsedTorrent, err := parseTorrentFile(filePath)
 		if err != nil {
 			fmt.Println(err)
 			return
 		}
-		fmt.Println("Tracker URL:", tracker)
-		fmt.Println("Length:", length)
-		fmt.Println("Info Hash:", hashedInfo)
+		fmt.Println("Tracker URL:", parsedTorrent.Tracker)
+		fmt.Println("Length:", parsedTorrent.Length)
+		fmt.Println("Info Hash:", parsedTorrent.InfoHash)
+		fmt.Println("Piece Length:", parsedTorrent.PieceLength)
+		fmt.Println("Piece Hashes:")
+		for i := range parsedTorrent.PieceHashes {
+			fmt.Println(parsedTorrent.PieceHashes[i])
+		}
 	} else {
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
