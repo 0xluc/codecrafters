@@ -6,6 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
+
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -115,7 +119,9 @@ func main() {
 
 	command := os.Args[1]
 
-	if command == "decode" {
+	switch command {
+
+	case "decode":
 
 		bencodedValue := os.Args[2]
 
@@ -127,7 +133,7 @@ func main() {
 
 		jsonOutput, _ := json.Marshal(decoded)
 		fmt.Println(string(jsonOutput))
-	} else if command == "info" {
+	case "info":
 		filePath := os.Args[2]
 		parsedTorrent, err := parseTorrentFile(filePath)
 		if err != nil {
@@ -142,8 +148,76 @@ func main() {
 		for i := range parsedTorrent.PieceHashes {
 			fmt.Println(parsedTorrent.PieceHashes[i])
 		}
-	} else {
+	case "peers":
+		filePath := os.Args[2]
+		parsedTorrent, err := parseTorrentFile(filePath)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		peers, err := getPeers(parsedTorrent)
+		for i := range peers {
+			fmt.Println(peers[i])
+		}
+	default:
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
 	}
+
+}
+
+func hexToASCII(hexStr string) (string, error) {
+	bytes, err := hex.DecodeString(hexStr)
+	if err != nil {
+		return "", err
+	}
+	return string(bytes), nil
+}
+
+type TorrentPeers struct {
+	Interval int
+	Peers    string
+}
+
+func getPeers(parsedTorrent ParsedTorrent) ([]string, error) {
+	var result = make([]string, 0)
+	baseURL := parsedTorrent.Tracker
+	//encodes the InfoHash to ascii and transforms to url format
+	asciiStr, err := hexToASCII(parsedTorrent.InfoHash)
+	if err != nil {
+		fmt.Println("Error transforming hex to ascii,", err)
+	}
+	urlEncondedAsciiStr := url.QueryEscape(asciiStr)
+
+	params := url.Values{}
+	params.Add("peer_id", "00112233445566778889")
+	params.Add("port", "6881")
+	params.Add("uploaded", "0")
+	params.Add("downloaded", "0")
+	params.Add("left", strconv.FormatInt(parsedTorrent.Length, 10))
+	params.Add("compact", "1")
+	fullURL := baseURL + "?" + params.Encode() + "&info_hash=" + urlEncondedAsciiStr
+	resp, err := http.Get(fullURL)
+	defer resp.Body.Close()
+	if err != nil {
+		fmt.Println("error making the get request:", err)
+	}
+	var trakcerResponse TorrentPeers
+	err = bencode.Unmarshal(resp.Body, &trakcerResponse)
+	if err != nil {
+		fmt.Println("Error on unmarshal", err)
+	}
+	for i := 0; i < len(trakcerResponse.Peers); i += 6 {
+		// high value + low value
+		port := int(trakcerResponse.Peers[i+4])<<8 + int(trakcerResponse.Peers[i+5])
+		peer := fmt.Sprintf("%d.%d.%d.%d:%s",
+			trakcerResponse.Peers[i],
+			trakcerResponse.Peers[i+1],
+			trakcerResponse.Peers[i+2],
+			trakcerResponse.Peers[i+3],
+			strconv.Itoa(port))
+		result = append(result, peer)
+	}
+
+	return result, nil
 }
