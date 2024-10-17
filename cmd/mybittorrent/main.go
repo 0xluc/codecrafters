@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"strconv"
+	"time"
 
 	"net/http"
 	"net/url"
@@ -93,36 +95,12 @@ func parseTorrentFile(location string) (ParsedTorrent, error) {
 		return *parsedTorrent, err
 	}
 	return *parsedTorrent, nil
-
-	//if unicode.IsDigit(rune(bencodedString[0])) {
-	//	var firstColonIndex int
-
-	//	for i := 0; i < len(bencodedString); i++ {
-	//		if bencodedString[i] == ':' {
-	//			firstColonIndex = i
-	//			break
-	//		}
-	//	}
-
-	//	lengthStr := bencodedString[:firstColonIndex]
-
-	//	length, err := strconv.Atoi(lengthStr)
-	//	if err != nil {
-	//		return "", err
-	//	}
-
-	//	return bencodedString[firstColonIndex+1 : firstColonIndex+1+length], nil
-	//}
 }
 
 func main() {
-
 	command := os.Args[1]
-
 	switch command {
-
 	case "decode":
-
 		bencodedValue := os.Args[2]
 
 		decoded, err := decodeBencode(bencodedValue)
@@ -159,11 +137,24 @@ func main() {
 		for i := range peers {
 			fmt.Println(peers[i])
 		}
+	case "handshake":
+		filePath := os.Args[2]
+		parsedTorrent, err := parseTorrentFile(filePath)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		fmt.Println("Peer ID:", peerHandshake(parsedTorrent, os.Args[3]))
 	default:
 		fmt.Println("Unknown command: " + command)
 		os.Exit(1)
 	}
 
+}
+
+type TorrentPeers struct {
+	Interval int
+	Peers    string
 }
 
 func hexToASCII(hexStr string) (string, error) {
@@ -174,15 +165,10 @@ func hexToASCII(hexStr string) (string, error) {
 	return string(bytes), nil
 }
 
-type TorrentPeers struct {
-	Interval int
-	Peers    string
-}
-
 func getPeers(parsedTorrent ParsedTorrent) ([]string, error) {
 	var result = make([]string, 0)
 	baseURL := parsedTorrent.Tracker
-	//encodes the InfoHash to ascii and transforms to url format
+	//encodes the InfoHash to ascii
 	asciiStr, err := hexToASCII(parsedTorrent.InfoHash)
 	if err != nil {
 		fmt.Println("Error transforming hex to ascii,", err)
@@ -220,4 +206,33 @@ func getPeers(parsedTorrent ParsedTorrent) ([]string, error) {
 	}
 
 	return result, nil
+}
+
+func peerHandshake(parsedTorrent ParsedTorrent, address string) string {
+	infoHash, err := hexToASCII(parsedTorrent.InfoHash)
+	protocolLength := byte(19)
+	concatenatedBytes := append([]byte{protocolLength}, []byte("BitTorrent protocol")...)
+	concatenatedBytes = append(concatenatedBytes, make([]byte, 8)...)
+	concatenatedBytes = append(concatenatedBytes, []byte(infoHash)...)
+	concatenatedBytes = append(concatenatedBytes, []byte("00112233445566778889")...)
+
+	conn, err := net.DialTimeout("tcp", address, 5*time.Second)
+	if err != nil {
+		fmt.Println("Error connecting to server,", err)
+	}
+	defer conn.Close()
+
+	_, err = conn.Write(concatenatedBytes)
+	if err != nil {
+		fmt.Println("Error sending concatenated bytes:", err)
+	}
+
+	buffer := make([]byte, 68)
+	_, err = conn.Read(buffer)
+	if err != nil {
+		fmt.Println("Error reading data:", err)
+	}
+	hexRepresentation := hex.EncodeToString(buffer[len(buffer)-20:])
+
+	return hexRepresentation
 }
